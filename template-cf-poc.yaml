@@ -1,0 +1,158 @@
+Description: Create a Static WebSite with S3 and 1 Distribution Cloudfront to test latency with Route53 
+Parameters:
+  R53DomainName:
+    Description: Domain or subdomain name for your website
+    Type: String
+    Default: example.com
+  R53HostedZoneId:
+    Description: Domain Hosted Zone ID
+    Type: String
+Mappings:
+  RegionMap:  
+    us-east-1:
+      hostedzoneID: Z3AQBSTGFYJSTF
+      websiteendpoint: s3-website-us-east-1.amazonaws.com
+    us-west-1:
+      hostedzoneID: Z2F56UZL2M1ACD
+      websiteendpoint: s3-website-us-west-1.amazonaws.com
+    us-west-2:
+      hostedzoneID: Z3BJ6K6RIION7M
+      websiteendpoint: s3-website-us-west-2.amazonaws.com
+    eu-west-1:
+      hostedzoneID: Z1BKCTXD74EZPE
+      websiteendpoint: s3-website-eu-west-1.amazonaws.com
+    ap-southeast-1:
+      hostedzoneID: Z3O0J2DXBE1FTB
+      websiteendpoint: s3-website-ap-southeast-1.amazonaws.com
+    ap-southeast-2:
+      hostedzoneID: Z1WCIGYICN2BYD
+      websiteendpoint: s3-website-ap-southeast-2.amazonaws.com
+    ap-northeast-1:
+      hostedzoneID: Z2M4EHUR26P7ZW
+      websiteendpoint: s3-website-ap-northeast-1.amazonaws.com
+    sa-east-1:
+      hostedzoneID: Z31GFT0UA1I2HV
+      websiteendpoint: s3-website-sa-east-1.amazonaws.com
+Resources:
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: PublicRead
+      BucketName: !Sub ${R53DomainName}
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+    #DeletionPolicy: Retain
+  BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      PolicyDocument:
+        Id: MyPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join 
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3Bucket
+                - /*
+      Bucket: !Ref S3Bucket
+  WWWBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub
+        - www.${Domain}
+        - Domain: !Sub ${R53DomainName}
+      AccessControl: BucketOwnerFullControl
+      WebsiteConfiguration:
+        RedirectAllRequestsTo:
+          HostName: !Ref S3Bucket
+  myDNS:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Sub ${R53HostedZoneId}
+      Comment: Zone apex alias.
+      RecordSets:
+      - Name: !Sub ${R53DomainName}
+        Type: A
+        AliasTarget:
+          HostedZoneId: !FindInMap [ RegionMap, !Ref 'AWS::Region', hostedzoneID]
+          DNSName: !FindInMap [ RegionMap, !Ref 'AWS::Region', websiteendpoint]
+      - Name: !Sub
+            - www.${Domain}
+            - Domain: !Sub ${R53DomainName}
+        Type: A
+        AliasTarget:
+          HostedZoneId: !FindInMap [ RegionMap, !Ref 'AWS::Region', hostedzoneID]
+          DNSName: !FindInMap [ RegionMap, !Ref 'AWS::Region', websiteendpoint]
+  myDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn:
+    - S3Bucket
+    Properties:
+      DistributionConfig:
+        Comment: Soluciones orion CDN Test
+        Origins:
+        - DomainName: !Select [2, !Split ["/", !GetAtt S3Bucket.WebsiteURL]]
+          Id: myS3Origin
+          CustomOriginConfig:
+            HTTPPort: '80'
+            HTTPSPort: '443'
+            OriginProtocolPolicy: http-only
+        Enabled: 'true'
+        HttpVersion: 'http2'
+        DefaultRootObject: index.html
+        Aliases:
+        - !Sub ${R53DomainName}
+        - !Sub
+            - www.${Domain}
+            - Domain: !Sub ${R53DomainName}
+        #Logging:
+        #  IncludeCookies: 'false'
+        #  Bucket: !Sub ${R53DomainName}
+        #  Prefix: log
+        DefaultCacheBehavior:
+          AllowedMethods:
+          - DELETE
+          - GET
+          - HEAD
+          - OPTIONS
+          - PATCH
+          - POST
+          - PUT
+          TargetOriginId: myS3Origin
+          ForwardedValues:
+            QueryString: 'true'
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: whitelist
+            Locations:
+            - AQ
+            - CV
+        PriceClass: PriceClass_All
+        ViewerCertificate:
+          AcmCertificateArn: 'arn:aws:acm:us-east-1:733198118271:certificate/d2bd86e3-6212-4bc1-9585-3f1db2184957'
+          SslSupportMethod:  'sni-only'
+          MinimumProtocolVersion: 'TLSv1.2_2018'
+Outputs:  
+  S3BucketName:
+    Value: !Sub ${R53DomainName}
+    Description: Name for bucket on S3    
+  S3WebsiteURL:
+    Value: !GetAtt [S3Bucket, WebsiteURL]
+    Description: URL for website hosted on S3
+  S3BucketDomainName:
+    Value:  !GetAtt [S3Bucket, DomainName]
+    Description: Bucket Domain Name of S3 bucket
+  S3HostedZoneID:
+    Value: !FindInMap [ RegionMap, !Ref 'AWS::Region', hostedzoneID]
+    Description: Hosted Zone ID of S3 bucket
+  S3DNSName:
+    Value: !FindInMap [ RegionMap, !Ref 'AWS::Region', websiteendpoint]
+    Description: DNS Name of S3 bucket 
